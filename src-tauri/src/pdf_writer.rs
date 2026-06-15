@@ -1,14 +1,22 @@
 use crate::types::CompressedImage;
 use std::io::Write;
 
-pub fn write_pdf(images: &[CompressedImage], output_path: &str) -> Result<(), String> {
+pub fn write_pdf(
+    images: &[CompressedImage],
+    output_path: &str,
+    uniform_size: Option<(f64, f64)>,
+) -> Result<(), String> {
     let mut buf = Vec::new();
-    write_pdf_bytes(images, &mut buf)?;
+    write_pdf_bytes(images, &mut buf, uniform_size)?;
     std::fs::write(output_path, buf).map_err(|e| format!("Failed to write output: {e}"))?;
     Ok(())
 }
 
-fn write_pdf_bytes(images: &[CompressedImage], w: &mut Vec<u8>) -> Result<(), String> {
+fn write_pdf_bytes(
+    images: &[CompressedImage],
+    w: &mut Vec<u8>,
+    uniform_size: Option<(f64, f64)>,
+) -> Result<(), String> {
     // %PDF-1.4 header with binary comment
     w.extend_from_slice(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n");
 
@@ -34,10 +42,16 @@ fn write_pdf_bytes(images: &[CompressedImage], w: &mut Vec<u8>) -> Result<(), St
         let image_obj = 4 + 3 * i;
         let content_obj = 5 + 3 * i;
 
-        // Page dimensions in points
-        let dpi = if img.dpi > 0.0 { img.dpi } else { 200.0 };
-        let page_w = (img.width as f64 / dpi * 72.0).round();
-        let page_h = (img.height as f64 / dpi * 72.0).round();
+        // Page dimensions in points — use uniform size if provided
+        let (page_w, page_h) = if let Some((uw, uh)) = uniform_size {
+            (uw, uh)
+        } else {
+            let dpi = if img.dpi > 0.0 { img.dpi } else { 200.0 };
+            (
+                (img.width as f64 / dpi * 72.0).round(),
+                (img.height as f64 / dpi * 72.0).round(),
+            )
+        };
 
         // Page object (no stream)
         offsets.push(w.len());

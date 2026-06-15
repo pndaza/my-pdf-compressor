@@ -428,6 +428,27 @@ body {
   border-color: var(--accent);
 }
 
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.checkbox-label:hover span {
+  color: var(--text);
+}
+
 .btn-help {
   width: 18px;
   height: 18px;

@@ -119,6 +119,11 @@ function render() {
         <option value="2000">2000px</option>
         <option value="3000">3000px</option>
       </select>
+      <div class="control-sep"></div>
+      <label class="checkbox-label">
+        <input type="checkbox" id="uniform-checkbox" checked />
+        <span>Uniform page size</span>
+      </label>
     </div>
     <div class="content">
       <div class="image-grid" id="grid"></div>
@@ -212,6 +217,7 @@ async function compress() {
   const minWidth = parseInt(
     (document.getElementById("enlarge-select") as HTMLSelectElement).value
   );
+  const uniformPageSize = (document.getElementById("uniform-checkbox") as HTMLInputElement).checked;
 
   // Show progress overlay
   const overlay = document.createElement("div");
@@ -236,7 +242,7 @@ async function compress() {
   );
 
   try {
-    const result = await invoke<CompressResult>("compress_pdf", { choices, minWidth });
+    const result = await invoke<CompressResult>("compress_pdf", { choices, minWidth, uniformPageSize });
     unlisten();
     overlay.remove();
     showResult(result);

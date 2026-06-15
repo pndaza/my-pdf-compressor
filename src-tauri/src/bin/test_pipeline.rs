@@ -35,7 +35,7 @@ fn main() {
     }
 
     let bw_out = "/tmp/test_output_bw.pdf";
-    pdf_writer::write_pdf(&bw_images, bw_out).expect("pdf write failed");
+    pdf_writer::write_pdf(&bw_images, bw_out, None).expect("pdf write failed");
     let bw_size = std::fs::metadata(bw_out).unwrap().len();
     println!("  Output: {bw_out} ({:.0} KB)", bw_size as f64 / 1024.0);
 
@@ -55,7 +55,7 @@ fn main() {
     }
 
     let color_out = "/tmp/test_output_color.pdf";
-    pdf_writer::write_pdf(&color_images, color_out).expect("pdf write failed");
+    pdf_writer::write_pdf(&color_images, color_out, None).expect("pdf write failed");
     let color_size = std::fs::metadata(color_out).unwrap().len();
     println!("  Output: {color_out} ({:.0} KB)", color_size as f64 / 1024.0);
 
@@ -73,7 +73,7 @@ fn main() {
         })
         .collect();
     let mixed_out = "/tmp/test_output_mixed.pdf";
-    pdf_writer::write_pdf(&mixed, mixed_out).expect("pdf write failed");
+    pdf_writer::write_pdf(&mixed, mixed_out, None).expect("pdf write failed");
     let mixed_size = std::fs::metadata(mixed_out).unwrap().len();
     println!("  Output: {mixed_out} ({:.0} KB)", mixed_size as f64 / 1024.0);
 

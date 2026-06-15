@@ -57,9 +57,9 @@ fn main() {
     let dither_pdf = out_dir.join("dither.pdf");
     let smart_pdf = out_dir.join("smart_threshold.pdf");
 
-    pdf_writer::write_pdf(&threshold_imgs, thresh_pdf.to_str().unwrap()).unwrap();
-    pdf_writer::write_pdf(&dither_imgs, dither_pdf.to_str().unwrap()).unwrap();
-    pdf_writer::write_pdf(&smart_imgs, smart_pdf.to_str().unwrap()).unwrap();
+    pdf_writer::write_pdf(&threshold_imgs, thresh_pdf.to_str().unwrap(), None).unwrap();
+    pdf_writer::write_pdf(&dither_imgs, dither_pdf.to_str().unwrap(), None).unwrap();
+    pdf_writer::write_pdf(&smart_imgs, smart_pdf.to_str().unwrap(), None).unwrap();
 
     let orig_pdf_size = std::fs::metadata(input).unwrap().len();
     let thresh_size = std::fs::metadata(&thresh_pdf).unwrap().len();
