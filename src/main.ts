@@ -111,6 +111,7 @@ function render() {
       <button class="btn btn-sm" id="all-auto">Auto</button>
       <div class="control-sep"></div>
       <label class="select-label" for="enlarge-select">Enlarge small images</label>
+      <button class="btn-help" id="enlarge-help" title="When to use enlarge?">?</button>
       <select id="enlarge-select" class="select-input">
         <option value="0">Off</option>
         <option value="1000">1000px</option>
@@ -132,6 +133,7 @@ function render() {
   document.getElementById("all-bw")!.onclick = () => setAllMode("bw");
   document.getElementById("all-color")!.onclick = () => setAllMode("color");
   document.getElementById("all-auto")!.onclick = setAuto;
+  document.getElementById("enlarge-help")!.onclick = showEnlargeHelp;
 
   renderGrid();
 }
@@ -313,8 +315,94 @@ function showResult(result: CompressResult) {
   document.getElementById("close-result")!.onclick = () => overlay.remove();
 }
 
-function showError(msg: string) {
+function showEnlargeHelp() {
   const overlay = document.createElement("div");
+  overlay.className = "progress-overlay";
+
+  const content: Record<string, { title: string; intro1: string; intro2: string; use: string; useItems: string[]; off: string; offItems: string[]; note: string }> = {
+    en: {
+      title: "Enlarge small images",
+      intro1: "When B&amp;W pages come from low-resolution scans (under ~1500px wide), converting directly to 1-bit black &amp; white produces <b>jagged, pixelated edges</b>. Text looks blocky and hard to read.",
+      intro2: "<b>Enable enlarge</b> to upsample the image with bicubic interpolation <i>before</i> thresholding. This creates smooth grayscale gradients at the edges, so the 1-bit output has cleaner, anti-aliased lines.",
+      use: "When to use",
+      useItems: [
+        "Low-DPI scans or web-quality PDFs (images under 1500px wide)",
+        "When B&amp;W text looks jagged or blocky in the output",
+      ],
+      off: "When to turn off",
+      offItems: [
+        "High-resolution scans (300+ DPI, 2000px+ wide)",
+        "When minimizing file size is the priority",
+      ],
+      note: "Trade-off: enlarged images produce slightly larger G4 output because there are more pixels to encode, but the visual quality is significantly better for small sources.",
+    },
+    mm: {
+      title: "ပုံအသေးစားများကို ချဲ့ထွင်ခြင်း",
+      intro1: "အဖြူအမည် စာမျက်နှာများသည် အရွယ်အစားသေးငယ်သော (၁၅၀၀ ပီဇယ်အောက်) ပုံများမှ လာပါက၊ တိုက်ရိုက် အဖြူ/အမည် သို့ ပြောင်းလဲလိုက်သည့်အခါ <b>အစွန်းများ ထွက်ပေါ်လာပြီး</b> စာလုံးများ ထစ်ငန်းငန်း ဖြစ်သွားပါသည်။",
+      intro2: "<b>ချဲ့ထွင်မှုကို ဖွင့်ထားခြင်း</b>ဖြင့် ပုံကို bicubic နည်းလမ်းဖြင့် ချဲ့ထွင်ပေးပြီး <i>ထို့နောက်</i> အဖြူ/အမည်သို့ ပြောင်းလဲပါသည်။ အစွန်းများ ပိုမို ချောမွေ့ပြီး စာလုံးများ ဖတ်ရလွယ်ကူစေပါသည်။",
+      use: "အသုံးပြုသင့်သည့်အခါ",
+      useItems: [
+        "အရည်အသွေးနိမ့်သော စကင်(န်)များ (ပုံအကျယ် ၁၅၀၀ ပီဇယ်အောက်)",
+        "အဖြူ/အမည် စာလုံးများ ထစ်ငန်းငန်း ဖြစ်နေသည့်အခါ",
+      ],
+      off: "ပိတ်သင့်သည့်အခါ",
+      offItems: [
+        "အရည်အသွေးမြင့် စကင်(န်)များ (၃၀၀+ DPI၊ ၂၀၀၀ ပီဇယ်အထက်)",
+        "ဖိုင်အရွယ်အစား အသေးဆုံးဖြစ်ချင်သည့်အခါ",
+      ],
+      note: "သတိပြုရန် — ချဲ့ထွင်ထားသော ပုံများသည် G4 ဖိုင်အရွယ်အစား အနည်းငယ် ပိုကြီးစေသော်လည်း ပုံအရည်အသွေးမှာ သိသိသာသာ ပိုကောင်းစေပါသည်။",
+    },
+  };
+
+  let lang = "en";
+
+  function renderHelp() {
+    const c = content[lang];
+    const items = (items: string[]) => items.map((item) => `<li>${item}</li>`).join("");
+    return `
+      <div class="help-box">
+        <div class="help-header">
+          <h3>${c.title}</h3>
+          <div class="lang-toggle">
+            <button class="lang-btn ${lang === "en" ? "active" : ""}" data-lang="en">EN</button>
+            <button class="lang-btn ${lang === "mm" ? "active" : ""}" data-lang="mm">မြန်မာ</button>
+          </div>
+        </div>
+        <p>${c.intro1}</p>
+        <p>${c.intro2}</p>
+        <div class="help-tip">
+          <b>${c.use}</b>
+          <ul>${items(c.useItems)}</ul>
+        </div>
+        <div class="help-tip">
+          <b>${c.off}</b>
+          <ul>${items(c.offItems)}</ul>
+        </div>
+        <p class="help-note">${c.note}</p>
+        <button class="btn btn-primary" id="close-help" style="margin-top:4px">Got it</button>
+      </div>
+    `;
+  }
+
+  overlay.innerHTML = renderHelp();
+  app.appendChild(overlay);
+
+  function bind() {
+    overlay.querySelector("#close-help")!.addEventListener("click", () => overlay.remove());
+    overlay.querySelectorAll(".lang-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        lang = (btn as HTMLElement).dataset.lang!;
+        overlay.innerHTML = renderHelp();
+        bind();
+      });
+    });
+  }
+
+  bind();
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+}
+
+function showError(msg: string) {  const overlay = document.createElement("div");
   overlay.className = "progress-overlay";
   overlay.innerHTML = `
     <div class="result-box">
