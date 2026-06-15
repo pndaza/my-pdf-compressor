@@ -84,19 +84,139 @@ body {
   font-size: 12px;
 }
 
-/* ── Empty state ── */
+/* ── Drop overlay ── */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(233, 69, 96, 0.1);
+  backdrop-filter: blur(4px);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.drop-zone {
+  border: 3px dashed var(--accent);
+  border-radius: 20px;
+  padding: 48px 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  color: var(--accent);
+  background: rgba(26, 26, 46, 0.9);
+}
+
+.drop-zone p {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* ── Empty state / drop target ── */
 .empty-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+
+.drop-target {
+  width: 100%;
+  max-width: 520px;
+  min-height: 320px;
+  border: 2px dashed #3a3a5c;
+  border-radius: 24px;
+  background: var(--surface);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  flex: 1;
-  gap: 16px;
+  gap: 20px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
 }
 
-.empty-state p {
+.drop-target:hover {
+  border-color: var(--accent);
+  background: #1c1c38;
+  transform: scale(1.01);
+}
+
+.drop-target.drag-active {
+  border-color: var(--accent);
+  background: rgba(233, 69, 96, 0.08);
+  transform: scale(1.02);
+}
+
+.drop-target .drop-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: var(--surface2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-dim);
+  transition: all 0.2s ease;
+}
+
+.drop-target:hover .drop-icon {
+  color: var(--accent);
+  background: rgba(233, 69, 96, 0.15);
+}
+
+.drop-target.drag-active .drop-icon {
+  color: var(--accent);
+  background: rgba(233, 69, 96, 0.15);
+}
+
+.drop-target .drop-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.drop-target .drop-subtitle {
   font-size: 14px;
+  color: var(--text-dim);
+}
+
+.drop-target .drop-subtitle span {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.drop-info {
+  margin-top: 8px;
+  padding-top: 20px;
+  border-top: 1px solid #3a3a5c;
+  width: 100%;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+}
+
+.info-label {
+  color: var(--text-dim);
+}
+
+.info-val {
+  color: var(--text);
+  font-weight: 500;
 }
 
 /* ── Image grid ── */

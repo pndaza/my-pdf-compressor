@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 interface ImageInfo {
   index: number;
@@ -21,23 +22,75 @@ interface CompressResult {
 }
 
 let images: ImageInfo[] = [];
+let isLoading = false;
 
 const app = document.getElementById("app")!;
+
+// Prevent browser default drag-and-drop (opening the file)
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("drop", (e) => e.preventDefault());
+
+// Tauri drag-and-drop
+const webview = getCurrentWebview();
+webview.onDragDropEvent((event) => {
+  if (event.payload.type === "enter" || event.payload.type === "over") {
+    if (!isLoading) {
+      document.getElementById("drop-target")?.classList.add("drag-active");
+      showDropOverlay();
+    }
+  } else if (event.payload.type === "leave") {
+    document.getElementById("drop-target")?.classList.remove("drag-active");
+    hideDropOverlay();
+  } else if (event.payload.type === "drop") {
+    document.getElementById("drop-target")?.classList.remove("drag-active");
+    hideDropOverlay();
+    const paths = (event.payload as { paths: string[] }).paths;
+    const pdf = paths.find((p) => p.toLowerCase().endsWith(".pdf"));
+    if (pdf) {
+      loadPdf(pdf);
+    } else if (paths.length > 0) {
+      showError("Please drop a PDF file");
+    }
+  }
+});
 
 function render() {
   if (images.length === 0) {
     app.innerHTML = `
       <div class="toolbar">
         <h1>PDF Compress</h1>
-        <button class="btn btn-primary" id="open-btn">Open PDF</button>
       </div>
       <div class="empty-state">
-        <p>Select a scanned PDF to compress</p>
-        <button class="btn btn-primary" id="open-btn2">Choose File</button>
+        <div class="drop-target" id="drop-target">
+          <div class="drop-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="12" y1="18" x2="12" y2="12"/>
+              <polyline points="9 15 12 12 15 15"/>
+            </svg>
+          </div>
+          <div class="drop-title">Drop a PDF here</div>
+          <div class="drop-subtitle">or <span>click to browse</span></div>
+          <div class="drop-info">
+            <div class="info-row">
+              <span class="info-label">B&amp;W pages</span>
+              <span class="info-val">CCITT Group 4</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Color pages</span>
+              <span class="info-val">JPEG 30%</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">No re-encoding</span>
+              <span class="info-val">Images embedded as-is</span>
+            </div>
+          </div>
+        </div>
       </div>
     `;
-    document.getElementById("open-btn")!.onclick = openFile;
-    document.getElementById("open-btn2")!.onclick = openFile;
+    const target = document.getElementById("drop-target")!;
+    target.onclick = openFile;
     return;
   }
 
@@ -115,14 +168,21 @@ async function openFile() {
   });
 
   if (!selected) return;
+  await loadPdf(selected);
+}
 
+async function loadPdf(path: string) {
+  isLoading = true;
   showLoading("Extracting images...");
 
   try {
-    images = await invoke<ImageInfo[]>("open_pdf", { path: selected });
+    images = await invoke<ImageInfo[]>("open_pdf", { path });
     render();
   } catch (e) {
     showError(String(e));
+  } finally {
+    isLoading = false;
+    hideLoading();
   }
 }
 
@@ -167,6 +227,7 @@ async function compress() {
 }
 
 function showLoading(msg: string) {
+  hideLoading();
   const overlay = document.createElement("div");
   overlay.className = "progress-overlay";
   overlay.id = "loading-overlay";
@@ -176,6 +237,32 @@ function showLoading(msg: string) {
     </div>
   `;
   app.appendChild(overlay);
+}
+
+function hideLoading() {
+  document.getElementById("loading-overlay")?.remove();
+}
+
+function showDropOverlay() {
+  if (document.getElementById("drop-overlay")) return;
+  const overlay = document.createElement("div");
+  overlay.className = "drop-overlay";
+  overlay.id = "drop-overlay";
+  overlay.innerHTML = `
+    <div class="drop-zone">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+      <p>Drop PDF here</p>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+function hideDropOverlay() {
+  document.getElementById("drop-overlay")?.remove();
 }
 
 function showResult(result: CompressResult) {
