@@ -96,8 +96,12 @@ function render() {
 
   app.innerHTML = `
     <div class="toolbar">
+      <button class="btn btn-icon" id="back-btn" title="Back">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 18 9 12 15 6"/>
+        </svg>
+      </button>
       <h1>PDF Compress</h1>
-      <button class="btn btn-sm" id="open-btn">Open PDF</button>
       <button class="btn btn-primary" id="compress-btn">Compress &amp; Save</button>
     </div>
     <div class="batch-controls">
@@ -105,13 +109,25 @@ function render() {
       <button class="btn btn-sm" id="all-bw">B&amp;W</button>
       <button class="btn btn-sm" id="all-color">Color</button>
       <button class="btn btn-sm" id="all-auto">Auto</button>
+      <div class="control-sep"></div>
+      <label class="select-label" for="enlarge-select">Enlarge small images</label>
+      <select id="enlarge-select" class="select-input">
+        <option value="0">Off</option>
+        <option value="1000">1000px</option>
+        <option value="1500" selected>1500px</option>
+        <option value="2000">2000px</option>
+        <option value="3000">3000px</option>
+      </select>
     </div>
     <div class="content">
       <div class="image-grid" id="grid"></div>
     </div>
   `;
 
-  document.getElementById("open-btn")!.onclick = openFile;
+  document.getElementById("back-btn")!.onclick = () => {
+    images = [];
+    render();
+  };
   document.getElementById("compress-btn")!.onclick = compress;
   document.getElementById("all-bw")!.onclick = () => setAllMode("bw");
   document.getElementById("all-color")!.onclick = () => setAllMode("color");
@@ -191,6 +207,9 @@ async function compress() {
   btn.disabled = true;
 
   const choices = images.map((img) => ({ index: img.index, mode: img.mode }));
+  const minWidth = parseInt(
+    (document.getElementById("enlarge-select") as HTMLSelectElement).value
+  );
 
   // Show progress overlay
   const overlay = document.createElement("div");
@@ -215,7 +234,7 @@ async function compress() {
   );
 
   try {
-    const result = await invoke<CompressResult>("compress_pdf", { choices });
+    const result = await invoke<CompressResult>("compress_pdf", { choices, minWidth });
     unlisten();
     overlay.remove();
     showResult(result);

@@ -22,8 +22,8 @@ fn main() {
     for (i, (_, img)) in pages.iter().enumerate() {
         let orig_size = estimate_orig_jpeg_size(&pages, i);
 
-        let thresh = convert::convert_to_bw_threshold(img, 128).unwrap();
-        let dither = convert::convert_to_bw_dither(img).unwrap();
+        let thresh = convert::convert_to_bw_threshold(img, 128, 1500).unwrap();
+        let dither = convert::convert_to_bw_dither(img, 1500).unwrap();
         let color = convert::convert_to_color(img, 30).unwrap();
 
         let ts = thresh.data.len();

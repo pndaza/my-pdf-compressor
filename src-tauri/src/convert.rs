@@ -2,25 +2,50 @@ use crate::types::*;
 use fax::encoder::Encoder;
 use fax::{Color, VecWriter};
 
-pub fn convert_to_bw(img: &DecodedImage) -> Result<CompressedImage, String> {
-    convert_to_bw_threshold(img, 128)
+
+pub fn convert_to_bw(img: &DecodedImage, min_width: u32) -> Result<CompressedImage, String> {
+    convert_to_bw_threshold(img, 128, min_width)
+}
+
+/// Upsample small images before thresholding so edges anti-alias smoothly.
+/// Matches ImageMagick: `magick input.jpg -resize 1500x -threshold 50% -compress group4`
+fn maybe_resize(img: &DecodedImage, min_width: u32) -> (u32, u32, f64, Vec<u8>, bool) {
+    if min_width == 0 || img.width >= min_width {
+        return (img.width, img.height, img.dpi, img.data.clone(), img.is_color);
+    }
+
+    let scale = min_width as f64 / img.width as f64;
+    let new_h = (img.height as f64 * scale).round() as u32;
+    let new_dpi = img.dpi * scale;
+
+    let data = if img.is_color {
+        let buf = image::RgbImage::from_raw(img.width, img.height, img.data.clone())
+            .expect("failed to create RGB buffer");
+        image::imageops::resize(&buf, min_width, new_h, image::imageops::FilterType::CatmullRom)
+            .into_raw()
+    } else {
+        let buf = image::GrayImage::from_raw(img.width, img.height, img.data.clone())
+            .expect("failed to create gray buffer");
+        image::imageops::resize(&buf, min_width, new_h, image::imageops::FilterType::CatmullRom)
+            .into_raw()
+    };
+
+    (min_width, new_h, new_dpi, data, img.is_color)
 }
 
 /// Simple threshold — matches ImageMagick `-threshold 50%`.
-/// Produces clean bilevel images that compress extremely well with G4.
-/// Best choice for scanned documents.
-pub fn convert_to_bw_threshold(img: &DecodedImage, threshold: u8) -> Result<CompressedImage, String> {
-    let width = img.width;
-    let height = img.height;
+/// Upsamples images below min_width so the 1-bit output isn't jagged.
+pub fn convert_to_bw_threshold(img: &DecodedImage, threshold: u8, min_width: u32) -> Result<CompressedImage, String> {
+    let (width, height, dpi, data, is_color) = maybe_resize(img, min_width);
     let w = width as usize;
     let h = height as usize;
 
-    let bw_pixels: Vec<Color> = if img.is_color {
+    let bw_pixels: Vec<Color> = if is_color {
         (0..w * h)
             .map(|i| {
-                let r = img.data[i * 3] as u32;
-                let g = img.data[i * 3 + 1] as u32;
-                let b = img.data[i * 3 + 2] as u32;
+                let r = data[i * 3] as u32;
+                let g = data[i * 3 + 1] as u32;
+                let b = data[i * 3 + 2] as u32;
                 let lum = (r * 299 + g * 587 + b * 114) / 1000;
                 if lum > threshold as u32 {
                     Color::White
@@ -30,8 +55,7 @@ pub fn convert_to_bw_threshold(img: &DecodedImage, threshold: u8) -> Result<Comp
             })
             .collect()
     } else {
-        img.data
-            .iter()
+        data.iter()
             .map(|&v| {
                 if v > threshold {
                     Color::White
@@ -42,28 +66,26 @@ pub fn convert_to_bw_threshold(img: &DecodedImage, threshold: u8) -> Result<Comp
             .collect()
     };
 
-    encode_g4(&bw_pixels, width, height, img.dpi)
+    encode_g4(&bw_pixels, width, height, dpi)
 }
 
 /// Floyd-Steinberg error-diffusion dithering.
-/// Better visual quality but produces larger G4 output.
-pub fn convert_to_bw_dither(img: &DecodedImage) -> Result<CompressedImage, String> {
-    let width = img.width;
-    let height = img.height;
+pub fn convert_to_bw_dither(img: &DecodedImage, min_width: u32) -> Result<CompressedImage, String> {
+    let (width, height, dpi, data, is_color) = maybe_resize(img, min_width);
     let w = width as usize;
     let h = height as usize;
 
-    let mut errors: Vec<f32> = if img.is_color {
+    let mut errors: Vec<f32> = if is_color {
         (0..w * h)
             .map(|i| {
-                let r = img.data[i * 3] as f32;
-                let g = img.data[i * 3 + 1] as f32;
-                let b = img.data[i * 3 + 2] as f32;
+                let r = data[i * 3] as f32;
+                let g = data[i * 3 + 1] as f32;
+                let b = data[i * 3 + 2] as f32;
                 0.299 * r + 0.587 * g + 0.114 * b
             })
             .collect()
     } else {
-        img.data.iter().map(|&v| v as f32).collect()
+        data.iter().map(|&v| v as f32).collect()
     };
 
     let mut bw_pixels: Vec<Color> = Vec::with_capacity(w * h);
@@ -95,7 +117,7 @@ pub fn convert_to_bw_dither(img: &DecodedImage) -> Result<CompressedImage, Strin
         }
     }
 
-    encode_g4(&bw_pixels, width, height, img.dpi)
+    encode_g4(&bw_pixels, width, height, dpi)
 }
 
 fn encode_g4(

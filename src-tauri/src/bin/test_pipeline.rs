@@ -23,7 +23,7 @@ fn main() {
     println!("\n=== Converting all pages to B&W (CCITT G4) ===");
     let bw_images: Vec<_> = pages
         .iter()
-        .map(|(_, img)| convert::convert_to_bw(img).expect("bw conversion failed"))
+        .map(|(_, img)| convert::convert_to_bw(img, 1500).expect("bw conversion failed"))
         .collect();
     for (i, img) in bw_images.iter().enumerate() {
         println!(
@@ -68,7 +68,7 @@ fn main() {
             if i == 0 {
                 convert::convert_to_color(img, 30).unwrap()
             } else {
-                convert::convert_to_bw(img).unwrap()
+                convert::convert_to_bw(img, 1500).unwrap()
             }
         })
         .collect();

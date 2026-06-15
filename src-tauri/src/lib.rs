@@ -39,6 +39,7 @@ fn open_pdf(path: String, state: tauri::State<AppState>) -> Result<Vec<ImageInfo
 #[tauri::command]
 async fn compress_pdf(
     choices: Vec<ImageChoice>,
+    min_width: u32,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<CompressResult, String> {
@@ -69,7 +70,7 @@ async fn compress_pdf(
         });
 
         let compressed = match mode {
-            Mode::Bw => convert::convert_to_bw(&img)?,
+            Mode::Bw => convert::convert_to_bw(&img, min_width)?,
             Mode::Color => convert::convert_to_color(&img, 30)?,
         };
 
