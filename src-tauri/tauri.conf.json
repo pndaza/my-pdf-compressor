@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "PDF Compress",
+  "productName": "My PDF Compressor",
   "version": "0.1.0",
-  "identifier": "com.pdfcompress.desktop",
+  "identifier": "com.mypdfcompressor.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "PDF Compress",
+        "title": "My PDF Compressor",
         "width": 1100,
         "height": 750,
         "resizable": true,
@@ -33,6 +33,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": "Apple Development: Pinnyar Daza (Q5F84CH2NB)"
+    }
   }
 }

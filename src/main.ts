@@ -61,7 +61,7 @@ const en = {
   compressInfo: {
     title: "How compression works",
     intro:
-      "Most PDF compressors take a one-size-fits-all approach that hurts quality. PDF Compress picks the right codec for each page instead.",
+      "Most PDF compressors take a one-size-fits-all approach that hurts quality. PDF Compress picks the right codec for each image instead.",
     mostTitle: "How most compressors do it",
     mostItems: [
       "Apply one lossy JPEG pass to every page — even crisp B&W text.",
@@ -71,9 +71,9 @@ const en = {
     ],
     oursTitle: "How PDF Compress does it",
     items: [
-      { label: "B&W pages", val: "CCITT Group 4 — 1-bit fax encoding. Tiny files, crisp text." },
-      { label: "Color pages", val: "JPEG at 30% quality. Small size, fine for on-screen viewing." },
-      { label: "No re-encoding", val: "Images are embedded as-is. Existing text and vectors stay untouched." },
+      { label: "B&W images", val: "CCITT Group 4 — 1-bit fax encoding. Tiny files, crisp text." },
+      { label: "Color images", val: "JPEG at 30% quality. Small size, fine for on-screen viewing." },
+      { label: "Images only", val: "All images are re-encoded. Text, annotations, and vector graphics from the original are removed." },
     ],
     note: "The result is a dramatically smaller PDF with minimal visible quality loss — ideal for scans and image-heavy documents.",
   },
@@ -132,7 +132,7 @@ const mm: typeof en = {
   compressInfo: {
     title: "ဖိုင်ချုံ့စနစ် လုပ်ဆောင်ပုံ",
     intro:
-      "ပုံမှန် PDF compressor အများစုသည် အရည်အသွေးကို ထိခိုက်စေသည့် တစ်ပြေးညီနည်းလမ်းကိုသာ သုံးကြသည်။ PDF Compress ကမူ စာမျက်နှာအလိုက် အသင့်တော်ဆုံး codec ကို စနစ်တကျ ရွေးချယ်ပေးပါသည်။",
+      "ပုံမှန် PDF compressor အများစုသည် အရည်အသွေးကို ထိခိုက်စေသည့် တစ်ပြေးညီနည်းလမ်းကိုသာ သုံးကြသည်။ PDF Compress ကမူ ပုံတစ်ခုချင်းအလိုက် အသင့်တော်ဆုံး codec ကို စနစ်တကျ ရွေးချယ်ပေးပါသည်။",
     mostTitle: "အခြား compressor များ လုပ်ဆောင်ပုံ",
     mostItems: [
       "ကြည်လင်ပြတ်သားသည့် ဖြူ/မဲစာသားများ အပါအဝင် စာမျက်နှာအားလုံးကို lossy JPEG pass တစ်ခုတည်းဖြင့်သာ ပြောင်းလဲပစ်သည်။",
@@ -142,9 +142,9 @@ const mm: typeof en = {
     ],
     oursTitle: "PDF Compress လုပ်ဆောင်ပုံ",
     items: [
-      { label: "ဖြူ/မဲ စာမျက်နှာများ", val: "CCITT Group 4 — 1-bit fax encoding သုံးသည်။ ဖိုင်အရွယ်အစား အလွန်သေးငယ်ပြီး စာသားများ ကြည်လင်ပြတ်သားသည်။" },
-      { label: "အရောင်ပါ စာမျက်နှာများ", val: "JPEG ကို Quality 30% ဖြင့် သုံးသည်။ ဖိုင်အရွယ်အစား သေးငယ်ပြီး မျက်နှာပြင်ပေါ်တွင် ကြည့်ရှုရန် အဆင်ပြေသည်။" },
-      { label: "မူရင်းအတိုင်း ထားရှိခြင်း", val: "ပုံများကို မူရင်းအတိုင်းသာ ထည့်သွင်းပေးသည်။ ရှိပြီးသား စာသားများနှင့် vector များ လုံးဝမပြောင်းလဲပါ။" },
+      { label: "ဖြူ/မဲ ပုံများ", val: "CCITT Group 4 — 1-bit fax encoding သုံးသည်။ ဖိုင်အရွယ်အစား အလွန်သေးငယ်ပြီး စာသားများ ကြည်လင်ပြတ်သားသည်။" },
+      { label: "အရောင်ပါ ပုံများ", val: "JPEG ကို Quality 30% ဖြင့် သုံးသည်။ ဖိုင်အရွယ်အစား သေးငယ်ပြီး မျက်နှာပြင်ပေါ်တွင် ကြည့်ရှုရန် အဆင်ပြေသည်။" },
+      { label: "ပုံများသာ ထိန်းသိမ်းခြင်း", val: "ပုံအားလုံးကို ပြန်လည် encode လုပ်သည်။ မူရင်းရှိ စာသားများ၊ မှတ်ချက်များနှင့် vector ဂရပ်ဖစ်များ ဖယ်ရှားခံရပါသည်။" },
     ],
     note: "ရလဒ်အနေဖြင့် အရည်အသွေးကျဆင်းမှုကို မသိသာစေဘဲ ဖိုင်အရွယ်အစားကို သိသိသာသာ သေးငယ်သွားစေသဖြင့် စကင်ဖတ်ထားသော စာရွက်စာတမ်းများနှင့် ပုံအများအပြားပါဝင်သည့် ဖိုင်များအတွက် အသင့်တော်ဆုံး ဖြစ်သည်။",
   },

@@ -1,4 +1,4 @@
-# PDF Compress
+# My PDF Compressor
 
 Cross-platform desktop app to compress scanned PDFs. Built with Tauri 2 + Rust.
 
@@ -15,20 +15,17 @@ Output is saved next to the original as `*_compressed.pdf`.
 
 ```bash
 npm install
-cargo tauri dev      # development
-cargo tauri build    # production bundle
+npm run tauri dev      # development
+npm run tauri build    # production bundle
 ```
 
-### Architecture
+### Core pipeline
 
-| File | Responsibility |
-|------|---------------|
-| `src-tauri/src/extract.rs` | Extract embedded image XObjects from PDF (lopdf) |
-| `src-tauri/src/convert.rs` | B&W: threshold + CCITT G4 (fax crate). Color: JPEG (image crate) |
-| `src-tauri/src/pdf_writer.rs` | Write PDF embedding raw compressed data, no re-encoding |
-| `src-tauri/src/lib.rs` | Tauri commands + state |
-| `src/main.ts` | UI: drag-drop, image grid, controls |
-| `src/style.css` | Styling |
+| Module | Responsibility |
+|--------|---------------|
+| `extract.rs` | Extract embedded image XObjects from PDF (lopdf) |
+| `convert.rs` | B&W: threshold + CCITT G4 (fax crate). Color: JPEG (image crate) |
+| `pdf_writer.rs` | Assemble new PDF from re-encoded image data (hand-writes PDF syntax) |
 
 ### CLI tools
 

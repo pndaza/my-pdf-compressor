@@ -60,7 +60,7 @@ fn write_pdf_bytes(
             "{page_obj} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_w} {page_h}] /Resources << /XObject << /Im0 {image_obj} 0 R >> >> /Contents {content_obj} 0 R >>\nendobj\n"
         ).unwrap();
 
-        // Image XObject (stream object) - embed raw compressed data, NO re-encoding
+        // Image XObject (stream object) - embed re-encoded compressed data
         offsets.push(w.len());
         write!(
             w,
@@ -69,10 +69,9 @@ fn write_pdf_bytes(
         ).unwrap();
 
         if img.is_ccitt {
-            // DecodeParms for CCITT Group 4: K=-1
             write!(
                 w,
-                " /DecodeParms << /K -1 /Columns {} /Rows {} >>",
+                " /Decode [1 0] /DecodeParms << /K -1 /Columns {} /Rows {} >>",
                 img.width, img.height
             ).unwrap();
         }
@@ -81,8 +80,20 @@ fn write_pdf_bytes(
         w.extend_from_slice(&img.data);
         w.extend_from_slice(b"\nendstream\nendobj\n");
 
-        // Content stream: draw image to fill page
-        let content = format!("q\n{page_w} 0 0 {page_h} 0 0 cm\n/Im0 Do\nQ\n");
+        // Content stream: scale image to fill page, preserving aspect ratio
+        let img_aspect = img.width as f64 / img.height as f64;
+        let page_aspect = page_w / page_h;
+        let ratio = img_aspect / page_aspect;
+
+        let (sw, sh, tx, ty) = if (0.97..=1.03).contains(&ratio) {
+            (page_w, page_h, 0.0, 0.0)
+        } else {
+            let scale = (page_w / img.width as f64).min(page_h / img.height as f64);
+            let sw = img.width as f64 * scale;
+            let sh = img.height as f64 * scale;
+            (sw, sh, (page_w - sw) / 2.0, (page_h - sh) / 2.0)
+        };
+        let content = format!("q\n{sw} 0 0 {sh} {tx} {ty} cm\n/Im0 Do\nQ\n");
         offsets.push(w.len());
         write!(
             w,

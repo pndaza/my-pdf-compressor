@@ -1,8 +1,8 @@
 [package]
-name = "pdf-compress"
+name = "my-pdf-compressor"
 version = "0.1.0"
 edition = "2021"
-default-run = "pdf-compress"
+default-run = "my-pdf-compressor"
 
 [lib]
 name = "pdf_compress_lib"
