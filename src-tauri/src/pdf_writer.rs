@@ -69,9 +69,13 @@ fn write_pdf_bytes(
         ).unwrap();
 
         if img.is_ccitt {
+            // No /Decode array: default [0 1] is correct for the fax crate's
+            // T.6 bitstream (BlackIs1 defaults to false → 0=black, 1=white,
+            // which matches DeviceGray's 0.0=black, 1.0=white). Adding
+            // /Decode [1 0] here would invert the image.
             write!(
                 w,
-                " /Decode [1 0] /DecodeParms << /K -1 /Columns {} /Rows {} >>",
+                " /DecodeParms << /K -1 /Columns {} /Rows {} >>",
                 img.width, img.height
             ).unwrap();
         }
