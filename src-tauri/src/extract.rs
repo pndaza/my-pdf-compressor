@@ -123,21 +123,150 @@ fn decode_jpeg(data: &[u8]) -> Result<(Vec<u8>, bool), String> {
 
 fn decompress_stream(
     content: &[u8],
-    _dict: &Dictionary,
+    dict: &Dictionary,
     filter: &str,
 ) -> Result<Vec<u8>, String> {
     use flate2::read::ZlibDecoder;
     use std::io::Read;
 
-    match filter {
+    let mut out = match filter {
         "FlateDecode" => {
             let mut d = ZlibDecoder::new(content);
             let mut out = Vec::new();
             d.read_to_end(&mut out)
                 .map_err(|e| format!("FlateDecode: {e}"))?;
-            Ok(out)
+            out
         }
-        _ => Err(format!("decompress: {filter} not implemented")),
+        _ => return Err(format!("decompress: {filter} not implemented")),
+    };
+
+    // Apply a decoding predictor if DecodeParms requests one. The predictor
+    // value follows the PNG spec: 10–15 mean one of the PNG row filters
+    // (15 = optimal, meaning each row carries its own filter-type byte).
+    if let Some((predictor, colors, bpc, columns)) = read_predictor(dict) {
+        if predictor >= 10 {
+            out = depngify(&out, predictor, colors, bpc, columns)?;
+        }
+    }
+    Ok(out)
+}
+
+/// Extract predictor parameters from a stream's DecodeParms dictionary.
+/// Returns (predictor, colors, bits_per_component, columns) with the PDF
+/// defaults applied when fields are absent.
+fn read_predictor(dict: &Dictionary) -> Option<(u32, u32, u32, u32)> {
+    let dp = dict.get(b"DecodeParms").ok()?;
+    // DecodeParms may be a single dict or an array of dicts (one per filter).
+    let dp_dict = match dp {
+        Object::Dictionary(d) => d,
+        Object::Array(arr) => arr.first().and_then(|o| match o {
+            Object::Dictionary(d) => Some(d),
+            _ => None,
+        })?,
+        _ => return None,
+    };
+    let predictor = dp_dict.get(b"Predictor").and_then(|v| v.as_i64()).unwrap_or(1) as u32;
+    let colors = dp_dict.get(b"Colors").and_then(|v| v.as_i64()).unwrap_or(1) as u32;
+    let bpc = dp_dict.get(b"BitsPerComponent").and_then(|v| v.as_i64()).unwrap_or(8) as u32;
+    let columns = dp_dict.get(b"Columns").and_then(|v| v.as_i64()).unwrap_or(1) as u32;
+    Some((predictor, colors, bpc, columns))
+}
+
+/// Reverse PNG prediction on a decoded FlateDecode stream.
+///
+/// After zlib inflation, each row is prefixed with a 1-byte filter type
+/// followed by the filtered pixel data. We reconstruct the true pixels by
+/// applying the inverse of each row's filter using the previous (already
+/// reconstructed) row as reference.
+fn depngify(
+    data: &[u8],
+    _predictor: u32,
+    colors: u32,
+    bpc: u32,
+    columns: u32,
+) -> Result<Vec<u8>, String> {
+    if bpc != 8 {
+        return Err(format!(
+            "PNG predictor with BitsPerComponent {bpc} not supported"
+        ));
+    }
+    let bpp = colors as usize; // bytes per pixel (bpc/8 * colors)
+    let row_bytes = columns as usize * bpp;
+    // Each encoded row: 1 filter byte + row_bytes of data.
+    let stride = row_bytes + 1;
+    if data.len() % stride != 0 {
+        return Err(format!(
+            "PNG predictor: data length {} not divisible by row stride {}",
+            data.len(),
+            stride
+        ));
+    }
+    let nrows = data.len() / stride;
+    let mut out = vec![0u8; nrows * row_bytes];
+    let mut prev_row = vec![0u8; row_bytes];
+
+    for r in 0..nrows {
+        let row_start = r * stride;
+        let filter = data[row_start];
+        let enc = &data[row_start + 1..row_start + 1 + row_bytes];
+        let cur = &mut out[r * row_bytes..(r + 1) * row_bytes];
+
+        match filter {
+            0 => {
+                // None
+                cur.copy_from_slice(enc);
+            }
+            1 => {
+                // Sub
+                for i in 0..row_bytes {
+                    let left = if i >= bpp { cur[i - bpp] } else { 0 };
+                    cur[i] = enc[i].wrapping_add(left);
+                }
+            }
+            2 => {
+                // Up
+                for i in 0..row_bytes {
+                    cur[i] = enc[i].wrapping_add(prev_row[i]);
+                }
+            }
+            3 => {
+                // Average
+                for i in 0..row_bytes {
+                    let left = if i >= bpp { cur[i - bpp] as u16 } else { 0 };
+                    let up = prev_row[i] as u16;
+                    cur[i] = enc[i].wrapping_add(((left + up) / 2) as u8);
+                }
+            }
+            4 => {
+                // Paeth
+                for i in 0..row_bytes {
+                    let left = if i >= bpp { cur[i - bpp] } else { 0 };
+                    let up = prev_row[i];
+                    let upleft = if i >= bpp { prev_row[i - bpp] } else { 0 };
+                    cur[i] = enc[i].wrapping_add(paeth(left, up, upleft));
+                }
+            }
+            other => return Err(format!("PNG predictor: unknown row filter {other}")),
+        }
+        prev_row.copy_from_slice(cur);
+    }
+    Ok(out)
+}
+
+fn paeth(a: u8, b: u8, c: u8) -> u8 {
+    let a = a as i32;
+    let b = b as i32;
+    let c = c as i32;
+    let p = a + b - c;
+    let pa = (p - a).abs();
+    let pb = (p - b).abs();
+    let pc = (p - c).abs();
+    if pa <= pb && pa <= pc {
+        a as u8
+    } else if pb <= pc {
+        b as u8
+    } else {
+        c as u8
     }
 }
 
