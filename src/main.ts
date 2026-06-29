@@ -446,6 +446,7 @@ function showLoading(msg: string) {
   overlay.id = "loading-overlay";
   overlay.innerHTML = `
     <div class="progress-box">
+      <div class="spinner"></div>
       <h3>${msg}</h3>
     </div>
   `;

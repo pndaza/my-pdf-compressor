@@ -11,10 +11,17 @@ struct AppState {
 }
 
 #[tauri::command]
-fn open_pdf(path: String, state: tauri::State<AppState>) -> Result<Vec<ImageInfo>, String> {
-    let pages = extract::extract_all_images(&path)?;
-    let mut infos = Vec::with_capacity(pages.len());
+async fn open_pdf(path: String, state: tauri::State<'_, AppState>) -> Result<Vec<ImageInfo>, String> {
+    // Heavy decoding runs on a blocking thread so the webview's main thread
+    // (and the macOS cursor/UI) stays responsive while the spinner shows.
+    let path_for_task = path.clone();
+    let pages = tauri::async_runtime::spawn_blocking(move || {
+        extract::extract_all_images(&path_for_task)
+    })
+    .await
+    .map_err(|e| format!("extract task failed: {e}"))??;
 
+    let mut infos = Vec::with_capacity(pages.len());
     for (index, (page_num, img)) in pages.into_iter().enumerate() {
         let thumbnail = extract::make_thumbnail(&img);
         let suggested_mode = if img.is_color { Mode::Color } else { Mode::Bw };
@@ -55,40 +62,50 @@ async fn compress_pdf(
         .map(|m| m.len())
         .unwrap_or(0);
 
-    let pages = extract::extract_all_images(&path)?;
+    let app_handle = app.clone();
+    let path_for_task = path.clone();
+    // Run decode + per-image compression on a blocking thread so the webview's
+    // main thread stays responsive. Progress events are emitted from inside
+    // the task via the cloned AppHandle (which is Send + Sync).
+    let (compressed_images, total, uniform_size) =
+        tauri::async_runtime::spawn_blocking(move || -> Result<(Vec<CompressedImage>, usize, Option<(f64, f64)>), String> {
+            let pages = extract::extract_all_images(&path_for_task)?;
 
-    // Auto-select most common page size if requested
-    let uniform_size = if uniform_page_size {
-        Some(find_most_common_page_size(&pages))
-    } else {
-        None
-    };
+            let uniform_size = if uniform_page_size {
+                Some(find_most_common_page_size(&pages))
+            } else {
+                None
+            };
 
-    let choice_map: std::collections::HashMap<usize, Mode> =
-        choices.into_iter().map(|c| (c.index, c.mode)).collect();
+            let choice_map: std::collections::HashMap<usize, Mode> =
+                choices.into_iter().map(|c| (c.index, c.mode)).collect();
 
-    let total = pages.len();
-    let mut compressed_images: Vec<CompressedImage> = Vec::with_capacity(total);
+            let total = pages.len();
+            let mut compressed_images: Vec<CompressedImage> = Vec::with_capacity(total);
 
-    for (index, (_, img)) in pages.into_iter().enumerate() {
-        let mode = choice_map.get(&index).copied().unwrap_or(if img.is_color {
-            Mode::Color
-        } else {
-            Mode::Bw
-        });
+            for (index, (_, img)) in pages.into_iter().enumerate() {
+                let mode = choice_map.get(&index).copied().unwrap_or(if img.is_color {
+                    Mode::Color
+                } else {
+                    Mode::Bw
+                });
 
-        let compressed = match mode {
-            Mode::Bw => convert::convert_to_bw(&img, min_width)?,
-            Mode::Color => convert::convert_to_color(&img, 30)?,
-        };
+                let compressed = match mode {
+                    Mode::Bw => convert::convert_to_bw(&img, min_width)?,
+                    Mode::Color => convert::convert_to_color(&img, 30)?,
+                };
 
-        compressed_images.push(compressed);
+                compressed_images.push(compressed);
 
-        let _ = app.emit("compress-progress", serde_json::json!({
-            "current": index + 1,
-            "total": total,
-        }));
-    }
+                let _ = app_handle.emit("compress-progress", serde_json::json!({
+                    "current": index + 1,
+                    "total": total,
+                }));
+            }
+            Ok((compressed_images, total, uniform_size))
+        })
+        .await
+        .map_err(|e| format!("compress task failed: {e}"))??;
 
     let output_path = pick_save_path(&path)?;
 
