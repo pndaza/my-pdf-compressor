@@ -72,28 +72,31 @@ fn decode_pdf_image(_doc: &Document, img: &PdfImage, dpi: f64) -> Result<Decoded
     let filters: Vec<String> = img.filters.clone().unwrap_or_default();
     let content = img.content;
 
-    let primary_filter = filters.last().map(|s| s.as_str()).unwrap_or("");
-
-    let (data, is_color) = match primary_filter {
-        "DCTDecode" => decode_jpeg(content)?,
-        "FlateDecode" | "LZWDecode" => {
-            let raw = decompress_stream(content, &img.origin_dict, primary_filter)?;
-            let bpc = img.bits_per_component.unwrap_or(8) as u32;
-            let cs = img.color_space.as_deref().unwrap_or("DeviceRGB");
-            interpret_raw(&raw, width, height, cs, bpc)?
+    let (data, is_color) = if filters.is_empty() {
+        // No filters — raw pixel data
+        let bpc = img.bits_per_component.unwrap_or(8) as u32;
+        let cs = img.color_space.as_deref().unwrap_or("DeviceRGB");
+        interpret_raw(content, width, height, cs, bpc)?
+    } else if filters.contains(&"DCTDecode".to_string()) {
+        // JPEG is self-contained — decode regardless of any other filters
+        decode_jpeg(content)?
+    } else if filters.contains(&"CCITTFaxDecode".to_string()) {
+        let dp = img.origin_dict.get(b"DecodeParms").ok();
+        decode_ccitt(content, width, height, dp)?
+    } else if filters.contains(&"JPXDecode".to_string()) {
+        return Err("JPEG2000 not supported".into());
+    } else if filters.contains(&"JBIG2Decode".to_string()) {
+        return Err("JBIG2 not supported".into());
+    } else {
+        // Chain of decompression filters (FlateDecode, RunLengthDecode, ...).
+        // Per the PDF spec, filters are applied in array order to decode.
+        let mut data = content.to_vec();
+        for (i, filter) in filters.iter().enumerate() {
+            data = apply_filter(&data, &img.origin_dict, filter, i)?;
         }
-        "CCITTFaxDecode" => {
-            let dp = img.origin_dict.get(b"DecodeParms").ok();
-            decode_ccitt(content, width, height, dp)?
-        }
-        "JPXDecode" => return Err("JPEG2000 not supported".into()),
-        "JBIG2Decode" => return Err("JBIG2 not supported".into()),
-        "" => {
-            let bpc = img.bits_per_component.unwrap_or(8) as u32;
-            let cs = img.color_space.as_deref().unwrap_or("DeviceRGB");
-            interpret_raw(content, width, height, cs, bpc)?
-        }
-        other => return Err(format!("unsupported filter: {other}")),
+        let bpc = img.bits_per_component.unwrap_or(8) as u32;
+        let cs = img.color_space.as_deref().unwrap_or("DeviceRGB");
+        interpret_raw(&data, width, height, cs, bpc)?
     };
 
     Ok(DecodedImage {
@@ -121,29 +124,33 @@ fn decode_jpeg(data: &[u8]) -> Result<(Vec<u8>, bool), String> {
     }
 }
 
-fn decompress_stream(
-    content: &[u8],
+/// Apply a single decoding filter to `data`. `filter_index` is the position
+/// of this filter within the /Filter array, used to look up the matching
+/// entry in /DecodeParms (which is also an array when /Filter is).
+fn apply_filter(
+    data: &[u8],
     dict: &Dictionary,
     filter: &str,
+    filter_index: usize,
 ) -> Result<Vec<u8>, String> {
-    use flate2::read::ZlibDecoder;
-    use std::io::Read;
-
     let mut out = match filter {
         "FlateDecode" => {
-            let mut d = ZlibDecoder::new(content);
+            use flate2::read::ZlibDecoder;
+            use std::io::Read;
+            let mut d = ZlibDecoder::new(data);
             let mut out = Vec::new();
             d.read_to_end(&mut out)
                 .map_err(|e| format!("FlateDecode: {e}"))?;
             out
         }
-        _ => return Err(format!("decompress: {filter} not implemented")),
+        "RunLengthDecode" => decode_runlength(data)?,
+        other => return Err(format!("filter {other} not implemented")),
     };
 
     // Apply a decoding predictor if DecodeParms requests one. The predictor
     // value follows the PNG spec: 10–15 mean one of the PNG row filters
     // (15 = optimal, meaning each row carries its own filter-type byte).
-    if let Some((predictor, colors, bpc, columns)) = read_predictor(dict) {
+    if let Some((predictor, colors, bpc, columns)) = read_predictor(dict, filter_index) {
         if predictor >= 10 {
             out = depngify(&out, predictor, colors, bpc, columns)?;
         }
@@ -151,18 +158,56 @@ fn decompress_stream(
     Ok(out)
 }
 
+/// RunLengthDecode: a PDF run-length encoding. The data is a sequence of
+/// length bytes followed by their content: a length byte n in 0..=127 means
+/// "copy the next n+1 bytes literally"; n in 129..=255 means "repeat the
+/// next single byte 257-n times". 128 is end-of-data.
+fn decode_runlength(data: &[u8]) -> Result<Vec<u8>, String> {
+    let mut out = Vec::with_capacity(data.len());
+    let mut i = 0;
+    while i < data.len() {
+        let n = data[i];
+        i += 1;
+        match n {
+            0..=127 => {
+                let count = n as usize + 1;
+                if i + count > data.len() {
+                    return Err("RunLengthDecode: short literal run".into());
+                }
+                out.extend_from_slice(&data[i..i + count]);
+                i += count;
+            }
+            128 => break, // EOD
+            129..=255 => {
+                let count = 257 - n as usize;
+                if i >= data.len() {
+                    return Err("RunLengthDecode: short repeated run".into());
+                }
+                let b = data[i];
+                out.extend(std::iter::repeat_n(b, count));
+                i += 1;
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Extract predictor parameters from a stream's DecodeParms dictionary.
-/// Returns (predictor, colors, bits_per_component, columns) with the PDF
-/// defaults applied when fields are absent.
-fn read_predictor(dict: &Dictionary) -> Option<(u32, u32, u32, u32)> {
+/// `filter_index` selects the matching entry when DecodeParms is an array
+/// (one dict per filter in the /Filter array). Returns
+/// (predictor, colors, bits_per_component, columns) with PDF defaults applied.
+fn read_predictor(dict: &Dictionary, filter_index: usize) -> Option<(u32, u32, u32, u32)> {
     let dp = dict.get(b"DecodeParms").ok()?;
     // DecodeParms may be a single dict or an array of dicts (one per filter).
     let dp_dict = match dp {
         Object::Dictionary(d) => d,
-        Object::Array(arr) => arr.first().and_then(|o| match o {
-            Object::Dictionary(d) => Some(d),
-            _ => None,
-        })?,
+        Object::Array(arr) => {
+            let obj = arr.get(filter_index).or_else(|| arr.first())?;
+            match obj {
+                Object::Dictionary(d) => d,
+                _ => return None,
+            }
+        }
         _ => return None,
     };
     let predictor = dp_dict.get(b"Predictor").and_then(|v| v.as_i64()).unwrap_or(1) as u32;
@@ -277,9 +322,22 @@ fn interpret_raw(
     color_space: &str,
     bpc: u32,
 ) -> Result<(Vec<u8>, bool), String> {
-    if bpc != 8 {
+    // For sub-byte bpc (1, 2, 4) we expand each sample to one 8-bit byte
+    // first, then proceed as if bpc were 8. Samples are stored most-
+    // significant-bit-first within each byte.
+    let raw = if bpc == 1 || bpc == 2 || bpc == 4 {
+        let colors = match color_space {
+            "DeviceRGB" => 3,
+            "DeviceGray" => 1,
+            "DeviceCMYK" => 4,
+            _ => return Err(format!("color space {color_space} not supported for raw")),
+        };
+        expand_samples(raw, width, height, colors, bpc)?
+    } else if bpc == 8 {
+        raw.to_vec()
+    } else {
         return Err(format!("BitsPerComponent {bpc} not supported for raw"));
-    }
+    };
 
     match color_space {
         "DeviceRGB" => {
@@ -300,7 +358,10 @@ fn interpret_raw(
                     raw.len()
                 ));
             }
-            Ok((raw[..expected].to_vec(), false))
+            // Scale the sample to the full 0–255 range so bpc=2/4 images
+            // look right (a 2-bit value 3 should be pure white, not 3).
+            let scaled = scale_gray(&raw[..expected], bpc);
+            Ok((scaled, false))
         }
         "DeviceCMYK" => {
             let mut rgb = Vec::with_capacity((width * height * 3) as usize);
@@ -318,6 +379,79 @@ fn interpret_raw(
         }
         _ => Err(format!("color space {color_space} not supported for raw")),
     }
+}
+
+/// Expand sub-byte samples (bpc = 1, 2, or 4) into one byte per sample.
+/// Each output byte holds just the sample value (NOT scaled to 0–255).
+///
+/// Per the PDF spec, image data is organized into rows and **each row
+/// begins on a byte boundary** — the trailing bits of the last byte in a
+/// row are unused padding and must be skipped. Treating the data as one
+/// continuous bit-stream (the naive approach) reads those pad bits as
+/// real samples, drifting the decode by one sample per row and producing
+/// the classic diagonal-distortion artifact.
+fn expand_samples(
+    raw: &[u8],
+    width: u32,
+    height: u32,
+    colors: u32,
+    bpc: u32,
+) -> Result<Vec<u8>, String> {
+    let w = width as usize;
+    let h = height as usize;
+    let samples_per_row = w * colors as usize;
+    // Bits used by one row, rounded up to a whole byte = the row stride.
+    let bits_per_row = samples_per_row * bpc as usize;
+    let row_bytes = bits_per_row.div_ceil(8);
+    let total_samples = samples_per_row * h;
+    let needed_bytes = row_bytes * h;
+    if raw.len() < needed_bytes {
+        return Err(format!(
+            "expand_samples: need {needed_bytes} bytes for {h} rows of {row_bytes} bytes at {bpc} bpc, got {}",
+            raw.len()
+        ));
+    }
+
+    let mask = (1u8 << bpc) - 1;
+    let mut out = Vec::with_capacity(total_samples);
+
+    for row in 0..h {
+        let row_start = row * row_bytes;
+        // Walk a bit cursor through this row only, decoding samples MSB-first.
+        // Because we advance strictly within [0, bits_per_row), the trailing
+        // pad bits of the last byte are never read.
+        for s in 0..samples_per_row {
+            let bit_pos = s * bpc as usize;
+            let byte_idx = row_start + (bit_pos >> 3);
+            let bit_off = bit_pos & 7;
+            // Pull two bytes (MSB-first) so a sample straddling a byte
+            // boundary is handled. The extra byte, if any, is within the
+            // row's allocated bytes; rows always end on a byte boundary.
+            let hi = raw[byte_idx] as u32;
+            let lo = if byte_idx + 1 < raw.len() {
+                raw[byte_idx + 1] as u32
+            } else {
+                0
+            };
+            let window = (hi << 8) | lo;
+            let shift = 16 - bit_off - bpc as usize;
+            out.push(((window >> shift) as u8) & mask);
+        }
+    }
+
+    Ok(out)
+}
+
+/// Scale gray sample values to the full 0–255 range based on bpc.
+/// E.g. for bpc=2 the values 0..=3 map to 0, 85, 170, 255. bpc=8 is a no-op.
+fn scale_gray(data: &[u8], bpc: u32) -> Vec<u8> {
+    if bpc == 8 {
+        return data.to_vec();
+    }
+    let max_val = (1u32 << bpc) - 1; // 1, 3, 15 for bpc 1, 2, 4
+    data.iter()
+        .map(|&v| ((v as u32 * 255 + max_val / 2) / max_val).min(255) as u8)
+        .collect()
 }
 
 fn decode_ccitt(

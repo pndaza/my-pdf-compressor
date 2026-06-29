@@ -16,3 +16,4 @@ Thumbs.db
 # Test artifacts
 *.pdf
 old_workflow/
+page-*.png
