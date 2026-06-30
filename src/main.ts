@@ -25,6 +25,7 @@ interface CompressResult {
 type Lang = "en" | "mm";
 
 const LANG_KEY = "pdf-compress-lang";
+const THEME_KEY = "pdf-compress-theme";
 
 const en = {
   appTitle: "PDF Compress",
@@ -201,6 +202,61 @@ function bindLangToggle() {
     });
 }
 
+// ── Theme ─────────────────────────────────────────────────────────────────
+type Theme = "light" | "dark";
+
+let theme: Theme = (localStorage.getItem(THEME_KEY) as Theme) || "dark";
+const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
+
+function effectiveTheme(): "light" | "dark" {
+  return theme;
+}
+
+function applyTheme() {
+  document.documentElement.setAttribute("data-theme", effectiveTheme());
+}
+
+function setTheme(t: Theme) {
+  if (t === theme) return;
+  theme = t;
+  localStorage.setItem(THEME_KEY, t);
+  applyTheme();
+  render();
+}
+
+function themeToggleHTML() {
+  const isDark = theme === "dark";
+  const sun = `<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>`;
+  const moon = `<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>`;
+  const title = isDark ? "Light" : "Dark";
+  return `
+    <div class="theme-toggle" id="theme-toggle">
+      <button class="theme-btn" id="theme-btn" title="${title}" aria-label="Toggle theme">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${isDark ? sun : moon}</svg>
+      </button>
+    </div>
+  `;
+}
+
+function bindThemeToggle() {
+  document
+    .getElementById("theme-btn")
+    ?.addEventListener("click", () => setTheme(theme === "dark" ? "light" : "dark"));
+}
+
+// Initialize theme: default to system preference on first run.
+if (!localStorage.getItem(THEME_KEY)) {
+  theme = prefersDark.matches ? "dark" : "light";
+}
+applyTheme();
+// Keep in sync with system changes until the user picks explicitly.
+prefersDark.addEventListener("change", (e) => {
+  if (!localStorage.getItem(THEME_KEY)) {
+    theme = e.matches ? "dark" : "light";
+    applyTheme();
+  }
+});
+
 // ── App state ─────────────────────────────────────────────────────────────
 let images: ImageInfo[] = [];
 let isLoading = false;
@@ -242,6 +298,7 @@ function render() {
     app.innerHTML = `
       <div class="toolbar">
         <h1>${t.appTitle}</h1>
+        ${themeToggleHTML()}
         ${langToggleHTML()}
       </div>
       <div class="empty-state">
@@ -270,6 +327,7 @@ function render() {
       </footer>
     `;
     bindLangToggle();
+    bindThemeToggle();
     const target = document.getElementById("drop-target")!;
     target.onclick = openFile;
     document.getElementById("compress-info-btn")!.onclick = showCompressInfo;
@@ -284,11 +342,10 @@ function render() {
         </svg>
       </button>
       <h1>${t.appTitle}</h1>
-      ${langToggleHTML()}
       <button class="btn btn-primary" id="compress-btn">${t.compressBtn}</button>
     </div>
     <div class="batch-controls">
-      <span style="font-size:12px;color:var(--text-dim)">${t.setAll}</span>
+      <span class="set-all-label">${t.setAll}</span>
       <button class="btn btn-sm" id="all-bw">${t.bw}</button>
       <button class="btn btn-sm" id="all-color">${t.color}</button>
       <button class="btn btn-sm" id="all-auto">${t.auto}</button>
@@ -313,7 +370,6 @@ function render() {
     </div>
   `;
 
-  bindLangToggle();
   document.getElementById("back-btn")!.onclick = () => {
     images = [];
     render();
@@ -486,7 +542,7 @@ function showResult(result: CompressResult) {
   overlay.className = "progress-overlay";
   overlay.innerHTML = `
     <div class="result-box">
-      <h3>${t.saved} ${ratio}%</h3>
+      <h3>${ratio}%<span class="pct-label">${t.compressed}</span></h3>
       <div class="result-stats">
         <div class="result-stat">
           <span class="label">${t.original}</span>
@@ -501,8 +557,8 @@ function showResult(result: CompressResult) {
           <span class="value">${result.image_count}</span>
         </div>
       </div>
-      <p style="margin-top:16px;font-size:12px;color:var(--text-dim);word-break:break-all">${result.output_path}</p>
-      <button class="btn btn-primary" style="margin-top:16px" id="close-result">${t.done}</button>
+      <p style="margin-top:16px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-faint);word-break:break-all">${result.output_path}</p>
+      <button class="btn btn-primary" style="margin-top:18px" id="close-result">${t.done}</button>
     </div>
   `;
   app.appendChild(overlay);
