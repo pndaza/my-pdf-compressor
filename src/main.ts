@@ -249,11 +249,14 @@ if (!localStorage.getItem(THEME_KEY)) {
   theme = prefersDark.matches ? "dark" : "light";
 }
 applyTheme();
-// Keep in sync with system changes until the user picks explicitly.
+// Keep in sync with system changes until the user picks explicitly. Re-render
+// so the toggle icon reflects the new theme (the sync path only matters
+// before an explicit pick, when the empty state is showing).
 prefersDark.addEventListener("change", (e) => {
   if (!localStorage.getItem(THEME_KEY)) {
     theme = e.matches ? "dark" : "light";
     applyTheme();
+    render();
   }
 });
 
@@ -334,6 +337,12 @@ function render() {
     return;
   }
 
+  // Default enlarge: if any image is under 1000px wide, suggest 1500px to
+  // avoid jagged 1-bit output; otherwise leave scaling off. Annotated as
+  // string so the option comparisons below stay type-valid.
+  const smallestWidth = images.reduce((m, i) => Math.min(m, i.width), Infinity);
+  const defaultEnlarge: string = smallestWidth < 1000 ? "1500" : "0";
+
   app.innerHTML = `
     <div class="toolbar">
       <button class="btn btn-icon" id="back-btn" title="${t.back}">
@@ -353,11 +362,11 @@ function render() {
       <label class="select-label" for="enlarge-select">${t.enlargeLabel}</label>
       <button class="btn-help" id="enlarge-help" title="${t.enlargeHelpTitle}">?</button>
       <select id="enlarge-select" class="select-input">
-        <option value="0">${t.enlargeOff}</option>
-        <option value="1000">1000px</option>
-        <option value="1500" selected>1500px</option>
-        <option value="2000">2000px</option>
-        <option value="3000">3000px</option>
+        <option value="0" ${defaultEnlarge === "0" ? "selected" : ""}>${t.enlargeOff}</option>
+        <option value="1000" ${defaultEnlarge === "1000" ? "selected" : ""}>1000px</option>
+        <option value="1500" ${defaultEnlarge === "1500" ? "selected" : ""}>1500px</option>
+        <option value="2000" ${defaultEnlarge === "2000" ? "selected" : ""}>2000px</option>
+        <option value="3000" ${defaultEnlarge === "3000" ? "selected" : ""}>3000px</option>
       </select>
       <div class="control-sep"></div>
       <label class="checkbox-label">

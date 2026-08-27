@@ -26,3 +26,11 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 fax = "0.2"
 base64 = "0.22"
 flate2 = "1"
+# LZWDecode stream filter. Note: lopdf pulls its own weezl 0.1, so this 0.2
+# dep coexists as a second copy. Must be used with with_tiff_size_switch
+# (PDF defaults EarlyChange=1) — see apply_filter.
+weezl = "0.2"
+# JBIG2Decode stream filter (1-bit bilevel scans). Vendored from LaurenzV/hayro
+# (patched: upstream's hardcoded MAX_INSTANCES=10_000 rejected legitimate
+# high-res text scans). We drive the Decoder trait directly.
+hayro-jbig2 = { path = "vendor/hayro-jbig2" }

@@ -823,6 +823,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fearless_simd"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b97b65636e5b9ef369943878ac74335ba1c55c1cb6adbf1e2c293c624248d693"
+
+[[package]]
 name = "field-offset"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1287,6 +1293,18 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+
+[[package]]
+name = "hayro-ccitt"
+version = "0.3.0"
+
+[[package]]
+name = "hayro-jbig2"
+version = "0.3.0"
+dependencies = [
+ "fearless_simd",
+ "hayro-ccitt",
+]
 
 [[package]]
 name = "heck"
@@ -1836,7 +1854,7 @@ dependencies = [
  "stringprep",
  "thiserror 2.0.18",
  "ttf-parser",
- "weezl",
+ "weezl 0.1.12",
 ]
 
 [[package]]
@@ -1940,6 +1958,7 @@ dependencies = [
  "base64 0.22.1",
  "fax",
  "flate2",
+ "hayro-jbig2",
  "image",
  "lopdf",
  "serde",
@@ -1948,6 +1967,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
+ "weezl 0.2.1",
 ]
 
 [[package]]
@@ -4265,6 +4285,12 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+
+[[package]]
+name = "weezl"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4ca08e5ef825b65b056d9efbd95c8750683f0a6d0466d02e96dc2e4e360f3d2"
 
 [[package]]
 name = "winapi"

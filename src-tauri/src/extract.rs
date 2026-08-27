@@ -62,42 +62,87 @@ fn get_page_dpi(doc: &Document, page_id: ObjectId) -> f64 {
     200.0
 }
 
-fn decode_pdf_image(_doc: &Document, img: &PdfImage, dpi: f64) -> Result<DecodedImage, String> {
+fn decode_pdf_image(
+    doc: &Document,
+    img: &PdfImage,
+    dpi: f64,
+) -> Result<DecodedImage, String> {
     let width = img.width as u32;
     let height = img.height as u32;
     if width == 0 || height == 0 {
         return Err("zero dimension image".into());
     }
-
     let filters: Vec<String> = img.filters.clone().unwrap_or_default();
     let content = img.content;
 
-    let (data, is_color) = if filters.is_empty() {
-        // No filters — raw pixel data
-        let bpc = img.bits_per_component.unwrap_or(8) as u32;
-        let cs = img.color_space.as_deref().unwrap_or("DeviceRGB");
-        interpret_raw(content, width, height, cs, bpc)?
-    } else if filters.contains(&"DCTDecode".to_string()) {
-        // JPEG is self-contained — decode regardless of any other filters
-        decode_jpeg(content)?
-    } else if filters.contains(&"CCITTFaxDecode".to_string()) {
-        let dp = img.origin_dict.get(b"DecodeParms").ok();
-        decode_ccitt(content, width, height, dp)?
-    } else if filters.contains(&"JPXDecode".to_string()) {
-        return Err("JPEG2000 not supported".into());
-    } else if filters.contains(&"JBIG2Decode".to_string()) {
-        return Err("JBIG2 not supported".into());
-    } else {
-        // Chain of decompression filters (FlateDecode, RunLengthDecode, ...).
-        // Per the PDF spec, filters are applied in array order to decode.
+    // "Terminal" image formats — self-describing bitstreams (JPEG, JBIG2) or
+    // fax (CCITT) — can't go through the raw-pixel interpreter. A compression
+    // filter (e.g. FlateDecode) may sit earlier in the /Filter array and must
+    // be unwound first: real PDFs wrap JPEG in FlateDecode
+    // (/Filter [/FlateDecode /DCTDecode]), and feeding still-zlib bytes to the
+    // JPEG decoder silently drops the page.
+    let terminal_idx = filters.iter().position(|f| {
+        matches!(
+            f.as_str(),
+            "DCTDecode" | "JPXDecode" | "JBIG2Decode" | "CCITTFaxDecode"
+        )
+    });
+
+    if let Some(idx) = terminal_idx {
+        // Walk the compression chain preceding the terminal format.
         let mut data = content.to_vec();
-        for (i, filter) in filters.iter().enumerate() {
+        for (i, filter) in filters[..idx].iter().enumerate() {
             data = apply_filter(&data, &img.origin_dict, filter, i)?;
         }
-        let bpc = img.bits_per_component.unwrap_or(8) as u32;
-        let cs = img.color_space.as_deref().unwrap_or("DeviceRGB");
-        interpret_raw(&data, width, height, cs, bpc)?
-    };
+        let (data, is_color, w, h) = match filters[idx].as_str() {
+            // JPEG — hand the decompressed bytes to the image crate. Uses the
+            // JPEG's actual dimensions (can differ from the dict), keeping
+            // grayscale JPEGs gray (is_color=false) for better G4 re-encode.
+            "DCTDecode" => {
+                let (data, is_color, w, h) = decode_jpeg(&data)?;
+                (data, is_color, w, h)
+            }
+            "JPXDecode" => return Err("JPEG2000 not supported".into()),
+            // JBIG2 — 1-bit bilevel scans. Optional /JBIG2Globals shared
+            // symbol-dictionary bytes precede the page stream (T.88 §7.5).
+            // Dimensions come from the codestream, which can differ from the
+            // image dict's W/H (e.g. padding rows).
+            "JBIG2Decode" => {
+                let globals = jbig2_globals(doc, img);
+                let (gray, w, h) = decode_jbig2(&data, globals.as_deref())?;
+                (gray, false, w, h)
+            }
+            // CCITT (fax) — B&W scans, grayscale 8-bit output.
+            "CCITTFaxDecode" => {
+                let dp = img.origin_dict.get(b"DecodeParms").ok();
+                let (gray, _) = decode_ccitt(&data, width, height, dp, idx)?;
+                (gray, false, width, height)
+            }
+            _ => unreachable!("terminal_idx only matches the four filters above"),
+        };
+        return Ok(DecodedImage {
+            width: w,
+            height: h,
+            data,
+            is_color,
+            dpi,
+        });
+    }
+
+    // Otherwise a chain of compression filters ending in raw pixel data,
+    // interpreted by color space + bpc. Color space is resolved against the
+    // document (indirect refs, ICCBased /N, CalGray/CalRGB) because lopdf's
+    // PdfImage::color_space is None for indirect refs and only yields the
+    // family name for arrays.
+    let mut data = content.to_vec();
+    for (i, filter) in filters.iter().enumerate() {
+        data = apply_filter(&data, &img.origin_dict, filter, i)?;
+    }
+    let bpc = img.bits_per_component.unwrap_or(8) as u32;
+    let cs = resolve_color_space(doc, &img.origin_dict)
+        .or_else(|| img.color_space.clone())
+        .unwrap_or_else(|| "DeviceRGB".to_string());
+    let (data, is_color) = interpret_raw(&data, width, height, &cs, bpc)?;
 
     Ok(DecodedImage {
         width,
@@ -108,8 +153,13 @@ fn decode_pdf_image(_doc: &Document, img: &PdfImage, dpi: f64) -> Result<Decoded
     })
 }
 
-fn decode_jpeg(data: &[u8]) -> Result<(Vec<u8>, bool), String> {
+/// Decode a JPEG stream. Returns (pixels, is_color, width, height) using the
+/// JPEG's OWN dimensions from its SOF header — these can disagree with the
+/// image dict's /Width /Height (patched JPEGs), and the buffer length must
+/// stay consistent with the returned dims or downstream `from_raw` panics.
+fn decode_jpeg(data: &[u8]) -> Result<(Vec<u8>, bool, u32, u32), String> {
     let img = image::load_from_memory(data).map_err(|e| format!("JPEG decode: {e}"))?;
+    let (w, h) = (img.width(), img.height());
     let is_color = matches!(
         img.color(),
         image::ColorType::Rgb8
@@ -118,9 +168,9 @@ fn decode_jpeg(data: &[u8]) -> Result<(Vec<u8>, bool), String> {
             | image::ColorType::Rgba16
     );
     if is_color {
-        Ok((img.to_rgb8().into_raw(), true))
+        Ok((img.to_rgb8().into_raw(), true, w, h))
     } else {
-        Ok((img.to_luma8().into_raw(), false))
+        Ok((img.to_luma8().into_raw(), false, w, h))
     }
 }
 
@@ -144,6 +194,15 @@ fn apply_filter(
             out
         }
         "RunLengthDecode" => decode_runlength(data)?,
+        "LZWDecode" => {
+            // PDF defaults to EarlyChange=1 (Adobe PDF Ref §7.4.4.1): the code
+            // width increases one code earlier than "original" LZW. In weezl
+            // that is `with_tiff_size_switch`; plain `Decoder::new` is
+            // EarlyChange=0 and corrupts silently past 9-bit codes.
+            use weezl::{decode::Decoder, BitOrder};
+            let mut dec = Decoder::with_tiff_size_switch(BitOrder::Msb, 8);
+            dec.decode(data).map_err(|e| format!("LZWDecode: {e:?}"))?
+        }
         other => return Err(format!("filter {other} not implemented")),
     };
 
@@ -217,12 +276,15 @@ fn read_predictor(dict: &Dictionary, filter_index: usize) -> Option<(u32, u32, u
     Some((predictor, colors, bpc, columns))
 }
 
-/// Reverse PNG prediction on a decoded FlateDecode stream.
+/// Reverse PNG prediction on a decoded stream. Each row carries a 1-byte
+/// filter type (None/Sub/Up/Average/Paeth) followed by the filtered pixels.
 ///
-/// After zlib inflation, each row is prefixed with a 1-byte filter type
-/// followed by the filtered pixel data. We reconstruct the true pixels by
-/// applying the inverse of each row's filter using the previous (already
-/// reconstructed) row as reference.
+/// PNG filters operate on bytes, not samples. The "bytes per pixel" used as
+/// the Sub/Average/Paeth left-neighbor distance is `ceil(colors * bpc / 8)`;
+/// for the common 8-bpc case that's just `colors`. Each row is
+/// `ceil(columns * colors * bpc / 8)` bytes wide — sub-byte samples (bpc
+/// 1/2/4) pack left-to-right within each row and every row begins on a byte
+/// boundary, exactly matching what `expand_samples` expects downstream.
 fn depngify(
     data: &[u8],
     _predictor: u32,
@@ -230,13 +292,16 @@ fn depngify(
     bpc: u32,
     columns: u32,
 ) -> Result<Vec<u8>, String> {
-    if bpc != 8 {
-        return Err(format!(
-            "PNG predictor with BitsPerComponent {bpc} not supported"
-        ));
+    if !(1..=16).contains(&bpc) {
+        return Err(format!("PNG predictor with BitsPerComponent {bpc} not supported"));
     }
-    let bpp = colors as usize; // bytes per pixel (bpc/8 * colors)
-    let row_bytes = columns as usize * bpp;
+    let bits_per_pixel = colors.checked_mul(bpc).ok_or("colors*bpc overflow")? as usize;
+    // ceil — a 1-bpc grayscale pixel is 1 bit, bpp rounds up to 1 byte.
+    let bpp = bits_per_pixel.div_ceil(8);
+    let row_bytes = (columns as usize)
+        .checked_mul(bits_per_pixel)
+        .ok_or("columns*bits overflow")?
+        .div_ceil(8);
     // Each encoded row: 1 filter byte + row_bytes of data.
     let stride = row_bytes + 1;
     if data.len() % stride != 0 {
@@ -325,6 +390,10 @@ fn interpret_raw(
     // For sub-byte bpc (1, 2, 4) we expand each sample to one 8-bit byte
     // first, then proceed as if bpc were 8. Samples are stored most-
     // significant-bit-first within each byte.
+    // For sub-byte bpc (1, 2, 4) we expand each sample to one byte and
+    // stretch to the full 0–255 range — for EVERY color space, not just
+    // gray. Skipping the stretch on RGB leaves each channel at 0..2^bpc-1
+    // (e.g. 0–3 for 2-bpc scans), rendering as a solid black page.
     let raw = if bpc == 1 || bpc == 2 || bpc == 4 {
         let colors = match color_space {
             "DeviceRGB" => 3,
@@ -332,7 +401,8 @@ fn interpret_raw(
             "DeviceCMYK" => 4,
             _ => return Err(format!("color space {color_space} not supported for raw")),
         };
-        expand_samples(raw, width, height, colors, bpc)?
+        let expanded = expand_samples(raw, width, height, colors, bpc)?;
+        scale_gray(&expanded, bpc)
     } else if bpc == 8 {
         raw.to_vec()
     } else {
@@ -358,10 +428,7 @@ fn interpret_raw(
                     raw.len()
                 ));
             }
-            // Scale the sample to the full 0–255 range so bpc=2/4 images
-            // look right (a 2-bit value 3 should be pure white, not 3).
-            let scaled = scale_gray(&raw[..expected], bpc);
-            Ok((scaled, false))
+            Ok((raw[..expected].to_vec(), false))
         }
         "DeviceCMYK" => {
             let mut rgb = Vec::with_capacity((width * height * 3) as usize);
@@ -442,8 +509,9 @@ fn expand_samples(
     Ok(out)
 }
 
-/// Scale gray sample values to the full 0–255 range based on bpc.
-/// E.g. for bpc=2 the values 0..=3 map to 0, 85, 170, 255. bpc=8 is a no-op.
+/// Scale sub-byte sample values (already expanded to one byte each) to the
+/// full 0–255 range based on bpc. Color-space agnostic. E.g. for bpc=2 the
+/// values 0..=3 map to 0, 85, 170, 255. bpc=8 is a no-op.
 fn scale_gray(data: &[u8], bpc: u32) -> Vec<u8> {
     if bpc == 8 {
         return data.to_vec();
@@ -454,96 +522,261 @@ fn scale_gray(data: &[u8], bpc: u32) -> Vec<u8> {
         .collect()
 }
 
+/// Decode a CCITT (fax) encoded image to 8-bit grayscale.
+///
+/// `/BlackIs1` (PDF spec §7.4.6) controls decoded bit polarity: `false` (the
+/// default) means a `1` bit is white; `true` means a `1` bit is black. The
+/// `fax` crate decodes to semantic Color::Black/White assuming BlackIs1=false
+/// semantics, so when the stream declares BlackIs1=true we flip the mapping —
+/// otherwise the page comes out white-on-black.
 fn decode_ccitt(
     content: &[u8],
     width: u32,
     height: u32,
     decode_parms: Option<&Object>,
+    filter_index: usize,
 ) -> Result<(Vec<u8>, bool), String> {
-    use lopdf::Dictionary as LoDict;
-
-    // DecodeParms can be a dict, an array of dicts (matching filter array),
-    // a reference, or absent (use defaults)
-    let dp_dict: &LoDict = match decode_parms {
-        Some(Object::Dictionary(d)) => d,
-        Some(Object::Array(arr)) => arr
-            .first()
-            .and_then(|o| match o {
-                Object::Dictionary(d) => Some(d),
-                _ => None,
-            })
-            .ok_or("invalid DecodeParms array")?,
-        None => {
-            // No DecodeParms — use sensible defaults and try Group 4 first
-            let mut pixels: Vec<u8> = Vec::with_capacity((width * height) as usize);
-            fax::decoder::decode_g4(
-                content.iter().copied(),
-                width as u16,
-                Some(height as u16),
-                |transitions| {
-                    for pel in fax::decoder::pels(transitions, width as u16) {
-                        pixels.push(if pel == fax::Color::Black { 0 } else { 255 });
-                    }
-                },
-            );
-            if pixels.len() == (width * height) as usize {
-                return Ok((pixels, false));
-            }
-            // Fallback: Group 3
-            pixels.clear();
-            fax::decoder::decode_g3(content.iter().copied(), |transitions| {
-                for pel in fax::decoder::pels(transitions, width as u16) {
-                    pixels.push(if pel == fax::Color::Black { 0 } else { 255 });
+    // Read a scalar DecodeParms field from either a dict or array-of-dicts.
+    // In the array form the entry must be indexed by the CCITT filter's
+    // position in /Filter — chains like [/FlateDecode /CCITTFaxDecode] carry
+    // [/flate-dict /ccitt-dict], and reading arr.first() would apply the
+    // Flate parms (K/Columns/BlackIs1 all defaulted) to a fax stream.
+    let parm = |key: &[u8]| -> Option<lopdf::Object> {
+        let dp = decode_parms?;
+        let d = match dp {
+            Object::Dictionary(d) => d,
+            Object::Array(arr) => {
+                let obj = arr.get(filter_index).or_else(|| arr.first())?;
+                match obj {
+                    Object::Dictionary(d) => d,
+                    _ => return None,
                 }
-            });
-            let expected = (width * height) as usize;
-            while pixels.len() < expected {
-                pixels.push(255);
             }
-            return Ok((pixels, false));
-        }
-        _ => return Err("CCITTFaxDecode: unresolved DecodeParms".into()),
+            _ => return None,
+        };
+        d.get(key).ok().cloned()
     };
 
-    let k = dp_dict
-        .get(b"K")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-    let columns = dp_dict
-        .get(b"Columns")
-        .and_then(|v| v.as_i64())
+    let columns: u16 = parm(b"Columns")
+        .and_then(|v| v.as_i64().ok())
         .unwrap_or(width as i64) as u16;
+    // /BlackIs1 defaults to false. A bare boolean or an integer (1 = true)
+    // both appear in the wild.
+    let black_is_1 = match parm(b"BlackIs1") {
+        Some(Object::Boolean(b)) => b,
+        Some(o) => o.as_i64().map(|v| v != 0).unwrap_or(false),
+        None => false,
+    };
 
     let mut pixels: Vec<u8> = Vec::with_capacity((width * height) as usize);
+    let decode = |transitions: &[u16], px: &mut Vec<u8>| {
+        for pel in fax::decoder::pels(transitions, columns) {
+            // fax's Color semantics match BlackIs1=false (1=white). When the
+            // stream declares BlackIs1=true, flip black↔white.
+            let is_black = pel == fax::Color::Black;
+            let ink = if black_is_1 { !is_black } else { is_black };
+            px.push(if ink { 0 } else { 255 });
+        }
+    };
 
+    let k: i64 = parm(b"K").and_then(|v| v.as_i64().ok()).unwrap_or(0);
     if k < 0 {
         // Group 4
-        fax::decoder::decode_g4(
-            content.iter().copied(),
-            columns,
-            Some(height as u16),
-            |transitions| {
-                for pel in fax::decoder::pels(transitions, columns) {
-                    pixels.push(if pel == fax::Color::Black { 0 } else { 255 });
-                }
-            },
-        );
-    } else {
-        // Group 3
-        fax::decoder::decode_g3(content.iter().copied(), |transitions| {
-            for pel in fax::decoder::pels(transitions, columns) {
-                pixels.push(if pel == fax::Color::Black { 0 } else { 255 });
-            }
+        fax::decoder::decode_g4(content.iter().copied(), columns, Some(height as u16), |t| {
+            decode(t, &mut pixels);
         });
+    } else {
+        // Group 3. With no DecodeParms at all, try G4 first then fall back —
+        // some producers omit the dict while still writing G4 streams.
+        if decode_parms.is_none() {
+            fax::decoder::decode_g4(content.iter().copied(), columns, Some(height as u16), |t| {
+                decode(t, &mut pixels);
+            });
+            if pixels.len() != (width * height) as usize {
+                pixels.clear();
+                fax::decoder::decode_g3(content.iter().copied(), |t| {
+                    decode(t, &mut pixels);
+                });
+            }
+        } else {
+            fax::decoder::decode_g3(content.iter().copied(), |t| {
+                decode(t, &mut pixels);
+            });
+        }
     }
 
-    // Pad if decoder produced fewer pixels than expected
+    // Reconcile the decoded length with width*height. decode_g3 has no row
+    // cap (it decodes until RTC/error), so a stream yielding more lines than
+    // /Height — or /Columns > /Width — overruns; a truncated stream underruns.
+    // Either mismatch would panic the downstream `from_raw(...).expect()` in
+    // convert.rs, so pad AND truncate here.
     let expected = (width * height) as usize;
     while pixels.len() < expected {
         pixels.push(255); // white
     }
+    pixels.truncate(expected);
 
     Ok((pixels, false))
+}
+
+/// Decode a JBIG2-encoded image to 8-bit grayscale (0 = black, 255 = white).
+///
+/// `globals` is the optional `/JBIG2Globals` stream bytes. JBIG2 is black=1
+/// (opposite of PDF gray convention), so the Decoder impl writes 0x00 for
+/// black and leaves the default 0xFF white.
+///
+/// Returns the pixels plus the image's *actual* dimensions from the
+/// codestream — NOT the image dict's W/H, which can disagree (e.g. trailing
+/// padding rows); sizing the buffer by the dict would panic.
+fn decode_jbig2(
+    data: &[u8],
+    globals: Option<&[u8]>,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    let image = hayro_jbig2::Image::new_embedded(data, globals)
+        .map_err(|e| format!("JBIG2: {e:?}"))?;
+    let (width, height) = (image.width(), image.height());
+
+    // 8-bit gray buffer defaulting to white; the writer only writes black.
+    let mut out = vec![0xFFu8; (width as usize) * (height as usize)];
+
+    struct Gray8Writer<'a> {
+        buf: &'a mut [u8],
+        pos: usize,
+    }
+    impl hayro_jbig2::Decoder for Gray8Writer<'_> {
+        fn push_pixel(&mut self, black: bool) {
+            if black && self.pos < self.buf.len() {
+                self.buf[self.pos] = 0x00;
+            }
+            self.pos += 1;
+        }
+        fn push_pixel_chunk(&mut self, black: bool, chunk_count: u32) {
+            let n = (chunk_count as usize) * 8;
+            if black {
+                let end = (self.pos + n).min(self.buf.len());
+                if self.pos < end {
+                    self.buf[self.pos..end].fill(0x00);
+                }
+            }
+            self.pos += n;
+        }
+        fn next_line(&mut self) {}
+    }
+
+    let mut writer = Gray8Writer { buf: &mut out, pos: 0 };
+    image
+        .decode(&mut writer)
+        .map_err(|e| format!("JBIG2 decode: {e:?}"))?;
+
+    Ok((out, width, height))
+}
+
+/// Resolve the optional `/JBIG2Globals` shared symbol-dictionary stream for a
+/// JBIG2 image. The stream may itself be Flate-compressed;
+/// `decompressed_content` applies its filter chain, matching what
+/// poppler/mupdf feed their decoders. Failures return None — decode proceeds
+/// without the dictionary.
+fn jbig2_globals(doc: &Document, img: &PdfImage) -> Option<Vec<u8>> {
+    let is_jbig2 = img
+        .filters
+        .as_ref()
+        .map(|fs| fs.iter().any(|f| f == "JBIG2Decode"))
+        .unwrap_or(false);
+    if !is_jbig2 {
+        return None;
+    }
+
+    // /DecodeParms may be a single dict or an array aligned to /Filter.
+    let dp = img.origin_dict.get(b"DecodeParms").ok()?;
+    let dp_dict = match dp {
+        Object::Dictionary(d) => d,
+        Object::Array(arr) => {
+            // Prefer the entry at the JBIG2 filter's index; fall back to the
+            // first dict carrying a JBIG2Globals key.
+            let jbig2_idx = img
+                .filters
+                .as_ref()
+                .and_then(|fs| fs.iter().position(|f| f == "JBIG2Decode"));
+            jbig2_idx
+                .and_then(|i| match arr.get(i)? {
+                    Object::Dictionary(d) => Some(d),
+                    _ => None,
+                })
+                .or_else(|| {
+                    arr.iter().filter_map(|o| match o {
+                        Object::Dictionary(d) => Some(d),
+                        _ => None,
+                    }).find(|d| d.get(b"JBIG2Globals").is_ok())
+                })?
+        }
+        _ => return None,
+    };
+
+    let globals_ref = match dp_dict.get(b"JBIG2Globals").ok()? {
+        Object::Reference(id) => *id,
+        _ => return None,
+    };
+
+    let stream = doc.get_object(globals_ref).and_then(|o| o.as_stream()).ok()?;
+    stream.decompressed_content().ok()
+}
+
+/// Map a bare color-space name to itself if it is one of the three device
+/// spaces, else None.
+fn device_name(name: &str) -> Option<String> {
+    match name {
+        "DeviceGray" | "DeviceRGB" | "DeviceCMYK" => Some(name.to_string()),
+        _ => None,
+    }
+}
+
+/// Resolve an image XObject's /ColorSpace to the device-space name
+/// interpret_raw understands. lopdf's PdfImage::color_space is None for
+/// indirect refs (`/ColorSpace 6 0 R`, what macOS Quartz writes) and only
+/// yields the family name ("ICCBased") for arrays — neither is usable.
+///
+/// Resolution follows PDF §8.6: bare device names pass through; ICCBased maps
+/// by the ICC stream's /N (1/3/4 → Gray/RGB/CMYK) with /Alternate fallback;
+/// CalGray/CalRGB share their device counterparts' layout; everything else
+/// (Indexed, Separation, DeviceN, Lab, Pattern) → None → clear error.
+fn resolve_color_space(doc: &Document, dict: &Dictionary) -> Option<String> {
+    let cs = dict.get(b"ColorSpace").ok()?;
+    // Indirect reference — resolve one level.
+    let cs = match cs {
+        Object::Reference(id) => doc.get_object(*id).ok()?,
+        _ => cs,
+    };
+    match cs {
+        Object::Name(n) => device_name(&String::from_utf8_lossy(n)),
+        Object::Array(arr) => {
+            let family = String::from_utf8_lossy(arr.first()?.as_name().ok()?).into_owned();
+            match family.as_str() {
+                "CalGray" => Some("DeviceGray".into()),
+                "CalRGB" => Some("DeviceRGB".into()),
+                "ICCBased" => {
+                    // [/ICCBased <stream-ref>]: the ICC stream's /N is the
+                    // component count; /Alternate is the fallback.
+                    let stream = match arr.get(1)? {
+                        Object::Reference(id) => {
+                            doc.get_object(*id).ok()?.as_stream().ok()?
+                        }
+                        _ => return None,
+                    };
+                    match stream.dict.get(b"N").and_then(|v| v.as_i64()) {
+                        Ok(1) => Some("DeviceGray".into()),
+                        Ok(3) => Some("DeviceRGB".into()),
+                        Ok(4) => Some("DeviceCMYK".into()),
+                        _ => {
+                            let alt = stream.dict.get(b"Alternate").ok()?;
+                            device_name(&String::from_utf8_lossy(alt.as_name().ok()?))
+                        }
+                    }
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 pub fn make_thumbnail(img: &DecodedImage) -> String {
